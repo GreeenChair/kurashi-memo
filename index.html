@@ -1,0 +1,655 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>くらしメモ</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #F5F3EE;
+  --surface: #FFFFFF;
+  --border: #E0DDD6;
+  --text: #1A1916;
+  --sub: #6B6860;
+  --hint: #A09D96;
+  --green: #2D6A4F; --green-bg: #D8EDE3; --green-dark: #1B4332;
+  --amber: #B8620A; --amber-bg: #FEF3D8;
+  --red: #C0392B; --red-bg: #FDECEA;
+  --gray-bg: #F0EDE7;
+  --r: 12px; --r-sm: 8px;
+  --shadow: 0 2px 8px rgba(0,0,0,0.07);
+  --font: 'Noto Sans JP', sans-serif;
+  --mono: 'DM Mono', monospace;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+body { font-family: var(--font); background: var(--bg); color: var(--text); min-height: 100vh; font-size: 15px; }
+
+/* Header */
+.hdr { background: var(--surface); border-bottom: 1px solid var(--border); padding: 14px 16px 0; position: sticky; top: 0; z-index: 100; box-shadow: var(--shadow); }
+.hdr-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.logo { font-size: 18px; font-weight: 700; color: var(--green-dark); }
+.logo small { font-weight: 400; font-size: 12px; color: var(--hint); margin-left: 6px; }
+.urgency-pill { background: var(--red); color: #fff; font-size: 12px; font-weight: 700; font-family: var(--mono); padding: 3px 10px; border-radius: 99px; }
+.urgency-pill.zero { background: var(--border); color: var(--hint); }
+
+/* Sync status */
+.sync-bar { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--hint); padding: 4px 0 10px; }
+.sync-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--hint); flex-shrink: 0; }
+.sync-dot.ok      { background: var(--green); }
+.sync-dot.error   { background: var(--red); }
+.sync-dot.loading { background: var(--amber); animation: pulse 1s infinite; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+/* Tabs */
+.tabs { display: flex; }
+.tab { flex: 1; background: none; border: none; padding: 10px 4px; font-family: var(--font); font-size: 13px; font-weight: 500; color: var(--sub); cursor: pointer; border-bottom: 2.5px solid transparent; transition: all .2s; }
+.tab.on { color: var(--green); border-bottom-color: var(--green); }
+
+/* Main */
+main { padding: 14px 14px 80px; max-width: 480px; margin: 0 auto; }
+.pane { display: none; }
+.pane.on { display: block; }
+
+/* Input area */
+.add-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); padding: 14px; margin-bottom: 14px; box-shadow: var(--shadow); }
+.add-card h3 { font-size: 13px; font-weight: 700; color: var(--sub); letter-spacing: .5px; text-transform: uppercase; margin-bottom: 12px; }
+.name-row { display: flex; gap: 8px; margin-bottom: 10px; align-items: center; }
+input[type=text], input[type=number] {
+  font-family: var(--font); font-size: 14px; background: var(--bg);
+  border: 1px solid var(--border); border-radius: var(--r-sm);
+  padding: 10px 12px; color: var(--text); outline: none;
+  transition: border-color .2s, box-shadow .2s; -webkit-appearance: none; width: 100%;
+}
+input:focus { border-color: var(--green); box-shadow: 0 0 0 3px rgba(45,106,79,0.12); }
+input::placeholder { color: var(--hint); }
+input:disabled { opacity: .5; }
+
+/* Price row */
+.price-row { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
+.price-row input { flex: 1; }
+.price-unit { font-size: 13px; color: var(--sub); flex-shrink: 0; }
+.price-hint { font-size: 11px; color: var(--hint); flex-shrink: 0; }
+
+/* Add button */
+.btn-add {
+  width: 100%; background: var(--green); color: #fff;
+  border: none; border-radius: var(--r-sm); padding: 12px;
+  font-family: var(--font); font-size: 15px; font-weight: 700;
+  cursor: pointer; transition: all .15s; -webkit-appearance: none;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+}
+.btn-add:active { background: var(--green-dark); transform: scale(0.98); }
+.btn-add:disabled { background: var(--border); color: var(--hint); cursor: not-allowed; transform: none; }
+
+/* List section */
+.sec-hdr { display: flex; align-items: center; justify-content: space-between; margin: 16px 0 8px; }
+.sec-title { font-size: 13px; font-weight: 700; color: var(--sub); text-transform: uppercase; letter-spacing: .5px; }
+.sec-count { font-size: 12px; color: var(--hint); font-family: var(--mono); }
+
+/* Item card */
+.item-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r); margin-bottom: 8px; overflow: hidden;
+  box-shadow: var(--shadow); transition: opacity .2s;
+}
+.item-card.status-out { border-left: 4px solid var(--red); }
+.item-card.status-low { border-left: 4px solid var(--amber); }
+.item-card.status-ok  { border-left: 4px solid var(--green); }
+.item-card.saving     { opacity: .55; }
+
+.item-inner { display: flex; align-items: center; padding: 12px 12px 12px 10px; gap: 10px; }
+.item-body { flex: 1; min-width: 0; }
+.item-name { font-size: 14px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.item-meta { font-size: 12px; color: var(--hint); margin-top: 3px; font-family: var(--mono); }
+
+/* Status cycle button */
+.btn-status {
+  flex-shrink: 0; border: none; background: none;
+  cursor: pointer; padding: 6px; border-radius: 8px;
+  transition: background .15s; -webkit-appearance: none;
+  font-size: 32px; line-height: 1; width: 48px; text-align: center;
+}
+.btn-status:active { background: var(--bg); }
+
+/* Pending indicator on status button */
+.btn-status.pending::after {
+  content: '';
+  display: block;
+  width: 6px; height: 6px;
+  background: var(--amber);
+  border-radius: 50%;
+  position: absolute;
+  margin-top: -8px;
+  margin-left: 32px;
+}
+.btn-status.pending { position: relative; }
+
+.btn-del { flex-shrink: 0; border: none; background: none; color: var(--hint); font-size: 15px; cursor: pointer; padding: 4px 6px; -webkit-appearance: none; }
+
+/* Price log */
+.price-log { padding: 0 12px 10px; border-top: 1px solid var(--border); }
+.price-log summary { font-size: 12px; color: var(--hint); padding: 6px 0; cursor: pointer; list-style: none; }
+.price-log summary::-webkit-details-marker { display: none; }
+.log-row { display: flex; justify-content: space-between; font-size: 12px; color: var(--sub); padding: 3px 0; border-bottom: 1px solid var(--border); }
+.log-row:last-child { border-bottom: none; }
+.log-price { font-family: var(--mono); }
+
+/* Checklist tab */
+.stats-row { display: flex; gap: 8px; margin-bottom: 14px; }
+.stat-box { flex: 1; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 10px; text-align: center; box-shadow: var(--shadow); }
+.stat-n { font-family: var(--mono); font-size: 22px; font-weight: 500; display: block; }
+.stat-n.red   { color: var(--red); }
+.stat-n.amber { color: var(--amber); }
+.stat-n.green { color: var(--green); }
+.stat-l { font-size: 11px; color: var(--hint); }
+
+/* Check item */
+.chk-item { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); margin-bottom: 8px; display: flex; align-items: center; padding: 12px; gap: 12px; box-shadow: var(--shadow); cursor: pointer; transition: background .15s; }
+.chk-item.done { opacity: .5; }
+.chk-item:active { background: var(--bg); }
+.chk-box { width: 22px; height: 22px; border: 2px solid var(--border); border-radius: 6px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 13px; transition: all .2s; }
+.chk-item.done .chk-box { background: var(--green); border-color: var(--green); color: #fff; }
+.chk-urgency-icon { font-size: 24px; flex-shrink: 0; line-height: 1; }
+
+/* Filter bar */
+.filter-bar { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; margin-bottom: 10px; scrollbar-width: none; }
+.filter-bar::-webkit-scrollbar { display: none; }
+.fchip { flex-shrink: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 99px; padding: 5px 12px; font-size: 12px; font-weight: 500; cursor: pointer; color: var(--sub); transition: all .15s; }
+.fchip.on { background: var(--green); color: #fff; border-color: var(--green); }
+
+/* Empty state */
+.empty { text-align: center; padding: 36px 20px; color: var(--hint); }
+.empty-icon { font-size: 32px; margin-bottom: 8px; }
+.empty-text { font-size: 13px; }
+
+/* Loading skeleton */
+.skeleton { background: linear-gradient(90deg, var(--border) 25%, var(--gray-bg) 50%, var(--border) 75%); background-size: 200% 100%; animation: shimmer 1.2s infinite; border-radius: var(--r); height: 64px; margin-bottom: 8px; }
+@keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
+
+/* Btn small */
+.btn-sm { background: none; border: 1px solid var(--border); border-radius: var(--r-sm); padding: 5px 10px; font-size: 12px; font-weight: 500; color: var(--sub); cursor: pointer; font-family: var(--font); -webkit-appearance: none; }
+.btn-sm:active { background: var(--bg); }
+
+/* Error banner */
+.err-banner { background: var(--red-bg); border: 1px solid var(--red); border-radius: var(--r-sm); padding: 10px 14px; font-size: 13px; color: var(--red); margin-bottom: 12px; display: none; }
+.err-banner.show { display: block; }
+
+/* Toast */
+.toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(70px); background: var(--text); color: #fff; padding: 9px 18px; border-radius: 99px; font-size: 13px; font-weight: 500; z-index: 999; transition: transform .3s cubic-bezier(.22,.68,0,1.2), opacity .3s; opacity: 0; white-space: nowrap; }
+.toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+</style>
+</head>
+<body>
+
+<header class="hdr">
+  <div class="hdr-top">
+    <div class="logo">くらしメモ <small id="sync-label">同期中...</small></div>
+    <div>
+      <span id="badge" class="urgency-pill zero">0</span>
+      <span style="font-size:11px;color:var(--hint);margin-left:4px;">切れた</span>
+    </div>
+  </div>
+  <div class="sync-bar">
+    <span class="sync-dot loading" id="sync-dot"></span>
+    <span id="sync-text">Google Sheetsに接続中...</span>
+    <button class="btn-sm" onclick="loadFromSheet()" style="margin-left:auto;font-size:11px;padding:3px 8px;">↻ 更新</button>
+  </div>
+  <div class="tabs">
+    <button class="tab on" data-tab="stock">📦 在庫管理</button>
+    <button class="tab" data-tab="buy">🛒 買い物リスト</button>
+  </div>
+</header>
+
+<main>
+
+  <!-- ===== 在庫管理タブ ===== -->
+  <div class="pane on" id="pane-stock">
+
+    <div class="err-banner" id="err-banner">⚠️ <span id="err-text"></span></div>
+
+    <div class="add-card">
+      <h3>品目を登録</h3>
+      <div class="name-row">
+        <input type="text" id="inp-name" placeholder="商品名（例：シャンプー）" oninput="updateAddBtn()">
+      </div>
+      <div class="price-row">
+        <input type="number" id="inp-price" placeholder="購入金額（任意）" min="0">
+        <span class="price-unit">円</span>
+        <span class="price-hint">省略可</span>
+      </div>
+      <button class="btn-add" id="btn-add" onclick="addItem()" disabled>
+        ＋ 登録する
+      </button>
+    </div>
+
+    <div class="filter-bar">
+      <button class="fchip on" data-f="all" onclick="setFilter('all',this)">すべて</button>
+      <button class="fchip" data-f="out" onclick="setFilter('out',this)">🚨 切れた</button>
+      <button class="fchip" data-f="low" onclick="setFilter('low',this)">⚠️ 残り少ない</button>
+      <button class="fchip" data-f="ok"  onclick="setFilter('ok',this)">✅ 十分ある</button>
+    </div>
+
+    <div class="sec-hdr">
+      <span class="sec-title">品目</span>
+      <span class="sec-count" id="item-count">0件</span>
+    </div>
+    <div id="item-list">
+      <div class="skeleton"></div>
+      <div class="skeleton"></div>
+      <div class="skeleton"></div>
+    </div>
+
+  </div>
+
+  <!-- ===== 買い物リストタブ ===== -->
+  <div class="pane" id="pane-buy">
+    <div class="stats-row">
+      <div class="stat-box"><span class="stat-n red"   id="s-out">0</span><span class="stat-l">切れた</span></div>
+      <div class="stat-box"><span class="stat-n amber" id="s-low">0</span><span class="stat-l">残り少ない</span></div>
+      <div class="stat-box"><span class="stat-n green" id="s-done">0</span><span class="stat-l">購入済み</span></div>
+    </div>
+    <div class="sec-hdr">
+      <span class="sec-title">今日の買い物</span>
+      <button class="btn-sm" onclick="clearDone()">完了済みを削除</button>
+    </div>
+    <div id="buy-list"></div>
+  </div>
+
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ─── API設定 ──────────────────────────────────
+const GAS_URL = 'https://script.google.com/macros/s/AKfycbx5AyhMszQnVwM32P-CubPaoPpl35nwtvN0TuIahMbTFtdBevFXur44QH-OeFTAz6gc/exec';
+
+// ─── State ────────────────────────────────────
+let items    = [];
+let buys     = [];
+let filterSt = 'all';
+
+// ─── ステータスのデバウンスキュー ──────────────
+// { itemId: { timer, pendingStatus } }
+const statusQueue = {};
+
+const STATUS_INFO = {
+  out: { icon: '🚨', label: '切れた' },
+  low: { icon: '⚠️', label: '残り少ない' },
+  ok:  { icon: '✅', label: '十分ある' }
+};
+
+// ─── Sync UI ──────────────────────────────────
+function setSyncState(state, text) {
+  document.getElementById('sync-dot').className  = 'sync-dot ' + state;
+  document.getElementById('sync-text').textContent = text;
+  document.getElementById('sync-label').textContent =
+    state === 'ok' ? '同期済み' : state === 'error' ? '⚠️ オフライン' : '同期中...';
+}
+
+function showError(msg) {
+  document.getElementById('err-text').textContent = msg;
+  const b = document.getElementById('err-banner');
+  b.classList.add('show');
+  setTimeout(() => b.classList.remove('show'), 5000);
+}
+
+// ─── API: GET ─────────────────────────────────
+async function loadFromSheet() {
+  setSyncState('loading', 'Google Sheetsを読み込み中...');
+  document.getElementById('item-list').innerHTML =
+    '<div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>';
+  try {
+    const res  = await fetch(GAS_URL);
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || '不明なエラー');
+    items = data.items;
+    syncBuys();
+    renderItems();
+    renderBuyList();
+    updateBadge();
+    setSyncState('ok', '最終更新: ' + nowStr());
+  } catch (e) {
+    setSyncState('error', '接続失敗 — 手動で更新してください');
+    showError('Sheetsへの接続に失敗しました: ' + e.message);
+    renderItems();
+  }
+}
+
+// ─── API: POST ────────────────────────────────
+async function postAction(body) {
+  const res  = await fetch(GAS_URL, { method: 'POST', body: JSON.stringify(body) });
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || '不明なエラー');
+  return data;
+}
+
+// ─── 品目追加 ──────────────────────────────────
+async function addItem() {
+  const name = document.getElementById('inp-name').value.trim();
+  if (!name) return;
+  const price = parseInt(document.getElementById('inp-price').value) || 0;
+
+  // 楽観的更新
+  const tempId  = 'tmp_' + Date.now();
+  const newItem = { id: tempId, name, status: 'low', prices: price ? [{ date: today(), p: price }] : [], _saving: true };
+  items.unshift(newItem);
+  resetForm();
+  renderItems();
+  renderBuyList();
+  updateBadge();
+
+  try {
+    setSyncState('loading', '保存中...');
+    const result = await postAction({ action: 'add', name, status: 'low', price });
+    const idx = items.findIndex(i => i.id === tempId);
+    if (idx !== -1) { items[idx].id = result.id; items[idx]._saving = false; }
+    syncBuys();
+    renderItems();
+    renderBuyList();
+    setSyncState('ok', '最終更新: ' + nowStr());
+    toast('「' + name + '」を登録しました');
+  } catch (e) {
+    items = items.filter(i => i.id !== tempId);
+    syncBuys();
+    renderItems();
+    renderBuyList();
+    updateBadge();
+    setSyncState('error', '保存失敗');
+    showError('登録に失敗しました。再度お試しください。');
+  }
+}
+
+// ─── ステータス変更（デバウンス方式）─────────────
+// タップするたびにUIを即更新し、
+// 最後のタップから800ms後にAPIを1回だけ呼ぶ
+function cycleStatus(id) {
+  const item = items.find(i => String(i.id) === String(id));
+  if (!item) return;
+
+  const cycle = { ok: 'low', low: 'out', out: 'ok' };
+  item.status = cycle[item.status];
+  updateBadge();
+
+  // カードのUI即更新（位置はそのまま）
+  const card = document.querySelector(`.item-card[data-id="${id}"]`);
+  if (card) {
+    card.className = `item-card status-${item.status}`;
+    const btn = card.querySelector('.btn-status');
+    if (btn) {
+      btn.textContent = STATUS_INFO[item.status].icon;
+      btn.classList.add('pending'); // 保存待ちインジケーター
+    }
+  }
+
+  // 買い物リストのbuyステータスも同期
+  const b = buys.find(x => String(x.srcId) === String(id));
+  if (b) b.status = item.status;
+
+  const labels = { out: '🚨 切れた', low: '⚠️ 残り少ない', ok: '✅ 十分ある' };
+  toast(esc(item.name) + ' → ' + labels[item.status]);
+
+  // デバウンス: 既存タイマーをリセットして800ms後に送信
+  if (statusQueue[id]) clearTimeout(statusQueue[id].timer);
+  statusQueue[id] = {
+    timer: setTimeout(() => flushStatus(id), 800)
+  };
+}
+
+// デバウンス後に実際にAPIへ送信
+async function flushStatus(id) {
+  const item = items.find(i => String(i.id) === String(id));
+  if (!item) return;
+  const card = document.querySelector(`.item-card[data-id="${id}"]`);
+  const savedStatus = item.status; // 送信時点のステータスを保持
+
+  try {
+    setSyncState('loading', '同期中...');
+    await postAction({ action: 'updateStatus', id, status: savedStatus });
+    if (card) card.querySelector('.btn-status')?.classList.remove('pending');
+    delete statusQueue[id];
+    setSyncState('ok', '最終更新: ' + nowStr());
+  } catch (e) {
+    setSyncState('error', '更新失敗');
+    showError('ステータスの更新に失敗しました。↻ 更新で再読み込みしてください。');
+    if (card) card.querySelector('.btn-status')?.classList.remove('pending');
+  }
+}
+
+// ─── 品目削除 ──────────────────────────────────
+async function deleteItem(id) {
+  const item = items.find(i => String(i.id) === String(id));
+  if (!item) return;
+  if (!confirm(`「${item.name}」を削除しますか？`)) return;
+
+  // デバウンス中のタイマーがあればキャンセル
+  if (statusQueue[id]) { clearTimeout(statusQueue[id].timer); delete statusQueue[id]; }
+
+  const backup = [...items];
+  items = items.filter(i => String(i.id) !== String(id));
+  syncBuys();
+  renderItems();
+  renderBuyList();
+  updateBadge();
+  toast('削除しました');
+
+  try {
+    setSyncState('loading', '削除中...');
+    await postAction({ action: 'delete', id });
+    setSyncState('ok', '最終更新: ' + nowStr());
+  } catch (e) {
+    items = backup;
+    syncBuys();
+    renderItems();
+    renderBuyList();
+    updateBadge();
+    setSyncState('error', '削除失敗');
+    showError('削除に失敗しました。再度お試しください。');
+  }
+}
+
+// ─── 買い物リスト ──────────────────────────────
+function syncBuys() {
+  buys = buys.filter(b => {
+    if (!b.srcId) return true;
+    const src = items.find(i => String(i.id) === String(b.srcId));
+    return src && (src.status === 'out' || src.status === 'low');
+  });
+  items.filter(i => i.status === 'out' || i.status === 'low').forEach(i => {
+    if (!buys.find(b => String(b.srcId) === String(i.id))) {
+      buys.push({ id: 'b' + i.id, srcId: i.id, name: i.name, status: i.status, done: false });
+    }
+  });
+}
+
+async function toggleBuy(id) {
+  const b = buys.find(x => x.id === id);
+  if (!b) return;
+  b.done = !b.done;
+
+  if (b.done && b.srcId) {
+    const src = items.find(i => String(i.id) === String(b.srcId));
+    if (src) { src.status = 'ok'; updateBadge(); }
+  } else if (!b.done && b.srcId) {
+    const src = items.find(i => String(i.id) === String(b.srcId));
+    if (src && src.status === 'ok') src.status = b.status;
+  }
+
+  // 差分更新
+  const el = document.querySelector(`.chk-item[data-bid="${id}"]`);
+  if (el) {
+    if (b.done) {
+      el.classList.add('done');
+      const box = el.querySelector('.chk-box');
+      box.textContent = '✓';
+      box.style.cssText = 'background:var(--green);border-color:var(--green);color:#fff';
+    } else {
+      el.classList.remove('done');
+      const box = el.querySelector('.chk-box');
+      box.textContent = '';
+      box.style.cssText = '';
+    }
+  }
+  updateBuyStats();
+
+  if (b.done) {
+    toast('✓ 購入済み！「' + b.name + '」をストックありに変更しました');
+    try {
+      await postAction({ action: 'updateStatus', id: b.srcId, status: 'ok' });
+      setSyncState('ok', '最終更新: ' + nowStr());
+    } catch (e) {
+      setSyncState('error', '同期失敗 — ↻ 更新してください');
+    }
+  }
+}
+
+function clearDone() {
+  const n = buys.filter(b => b.done).length;
+  buys = buys.filter(b => !b.done);
+  renderBuyList();
+  toast(n ? n + '件の完了済みを削除しました' : '完了済みはありません');
+}
+
+// ─── Render: 在庫リスト ───────────────────────
+function renderItems() {
+  const el = document.getElementById('item-list');
+  el.innerHTML = '';
+  const filtered = filterSt === 'all' ? items : items.filter(i => i.status === filterSt);
+  document.getElementById('item-count').textContent = items.length + '件';
+
+  if (!filtered.length) {
+    el.innerHTML = `<div class="empty"><div class="empty-icon">📋</div><div class="empty-text">該当する品目がありません</div></div>`;
+    return;
+  }
+
+  const order = { out: 0, low: 1, ok: 2 };
+  [...filtered].sort((a, b) => order[a.status] - order[b.status]).forEach(item => {
+    const si   = STATUS_INFO[item.status];
+    const priceStr = item.prices && item.prices.length
+      ? '直近 ¥' + Number(item.prices[item.prices.length - 1].p).toLocaleString()
+      : '';
+    const isPending = statusQueue[item.id] !== undefined;
+
+    const card = document.createElement('div');
+    card.className = `item-card status-${item.status}${item._saving ? ' saving' : ''}`;
+    card.dataset.id = item.id;
+
+    let logHTML = '';
+    if (item.prices && item.prices.length) {
+      logHTML = `<details class="price-log"><summary>購入履歴 (${item.prices.length}件)</summary>` +
+        item.prices.slice().reverse().map(r =>
+          `<div class="log-row"><span>${r.date}</span><span class="log-price">¥${Number(r.p).toLocaleString()}</span></div>`
+        ).join('') + `</details>`;
+    }
+
+    card.innerHTML = `
+      <div class="item-inner">
+        <button class="btn-status${isPending ? ' pending' : ''}" onclick="cycleStatus(${JSON.stringify(item.id)})">${si.icon}</button>
+        <div class="item-body">
+          <div class="item-name">${esc(item.name)}</div>
+          ${priceStr ? `<div class="item-meta">${priceStr}</div>` : ''}
+        </div>
+        <button class="btn-del" onclick="deleteItem(${JSON.stringify(item.id)})">✕</button>
+      </div>
+      ${logHTML}`;
+    el.appendChild(card);
+  });
+}
+
+// ─── Render: 買い物リスト ─────────────────────
+function renderBuyList() {
+  const el = document.getElementById('buy-list');
+  el.innerHTML = '';
+  syncBuys();
+  updateBuyStats();
+
+  if (!buys.length) {
+    el.innerHTML = `<div class="empty"><div class="empty-icon">🛒</div><div class="empty-text">買い物リストは空です<br>在庫管理で「切れた」「残り少ない」を<br>登録すると自動追加されます</div></div>`;
+    return;
+  }
+
+  const sortOrder = b => b.done ? 3 : b.status === 'out' ? 0 : 1;
+  [...buys].sort((a, b) => sortOrder(a) - sortOrder(b)).forEach(b => {
+    const div = document.createElement('div');
+    div.className = 'chk-item' + (b.done ? ' done' : '');
+    div.dataset.bid = b.id;
+    div.onclick = () => toggleBuy(b.id);
+    div.innerHTML = `
+      <div class="chk-box">${b.done ? '✓' : ''}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:14px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(b.name)}</div>
+      </div>
+      <span class="chk-urgency-icon" style="pointer-events:none">${b.status === 'out' ? '🚨' : '⚠️'}</span>`;
+    el.appendChild(div);
+  });
+}
+
+function updateBuyStats() {
+  document.getElementById('s-out').textContent  = buys.filter(b => !b.done && b.status === 'out').length;
+  document.getElementById('s-low').textContent  = buys.filter(b => !b.done && b.status === 'low').length;
+  document.getElementById('s-done').textContent = buys.filter(b => b.done).length;
+}
+
+// ─── Badge ────────────────────────────────────
+function updateBadge() {
+  const n = items.filter(i => i.status === 'out').length;
+  const badge = document.getElementById('badge');
+  badge.textContent = n;
+  badge.className = 'urgency-pill' + (n === 0 ? ' zero' : '');
+}
+
+// ─── Filter ───────────────────────────────────
+function setFilter(f, btn) {
+  filterSt = f;
+  document.querySelectorAll('.fchip').forEach(c => c.classList.remove('on'));
+  btn.classList.add('on');
+  renderItems();
+}
+
+// ─── Tabs ─────────────────────────────────────
+document.querySelectorAll('.tab').forEach(t => {
+  t.addEventListener('click', () => {
+    document.querySelectorAll('.tab,.pane').forEach(x => x.classList.remove('on'));
+    t.classList.add('on');
+    document.getElementById('pane-' + t.dataset.tab).classList.add('on');
+    renderItems();
+    renderBuyList();
+    updateBadge();
+  });
+});
+
+// ─── Form ─────────────────────────────────────
+function updateAddBtn() {
+  document.getElementById('btn-add').disabled = !document.getElementById('inp-name').value.trim();
+}
+
+function resetForm() {
+  document.getElementById('inp-name').value  = '';
+  document.getElementById('inp-price').value = '';
+  updateAddBtn();
+}
+
+// ─── Enter shortcuts ──────────────────────────
+document.getElementById('inp-name').addEventListener('keydown',  e => { if (e.key === 'Enter') document.getElementById('inp-price').focus(); });
+document.getElementById('inp-price').addEventListener('keydown', e => { if (e.key === 'Enter') addItem(); });
+
+// ─── Utils ────────────────────────────────────
+function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function today() { const d = new Date(); return (d.getMonth()+1) + '/' + d.getDate(); }
+function nowStr() { const d = new Date(); return d.getHours() + ':' + String(d.getMinutes()).padStart(2,'0'); }
+
+// ─── Toast ────────────────────────────────────
+let toastTimer;
+function toast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 2400);
+}
+
+// ─── Init ─────────────────────────────────────
+loadFromSheet();
+</script>
+</body>
+</html>
