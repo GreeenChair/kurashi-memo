@@ -524,7 +524,11 @@ function renderItems() {
   }
 
   const order = { out: 0, low: 1, ok: 2 };
-  [...filtered].sort((a, b) => order[a.status] - order[b.status]).forEach(item => {
+[...filtered].sort((a, b) => {
+  const statusDiff = order[a.status] - order[b.status];
+  if (statusDiff !== 0) return statusDiff;
+  return new Date(b.updatedAt) - new Date(a.updatedAt);
+}).forEach(item => {
     const si   = STATUS_INFO[item.status];
     const priceStr = item.prices && item.prices.length
       ? '直近 ¥' + Number(item.prices[item.prices.length - 1].p).toLocaleString()
