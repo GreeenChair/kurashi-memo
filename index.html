@@ -23,7 +23,7 @@
   --font: 'Noto Sans JP', sans-serif;
   --mono: 'DM Mono', monospace;
 }
-  
+
 * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
 body { font-family: var(--font); background: var(--bg); color: var(--text); min-height: 100vh; font-size: 15px; }
 
@@ -266,6 +266,30 @@ input:disabled { opacity: .5; }
 // ─── API設定 ──────────────────────────────────
 const GAS_URL = 'https://script.google.com/macros/s/AKfycbx5AyhMszQnVwM32P-CubPaoPpl35nwtvN0TuIahMbTFtdBevFXur44QH-OeFTAz6gc/exec';
 
+// ─── ローカルキャッシュ設定 ────────────────────
+// 起動直後に前回取得したitemsを即表示し、裏で最新化する
+// (stale-while-revalidate方式。GAS Web Appのコールドスタート待ちを
+//  ユーザーに体感させないための対策)
+const CACHE_KEY = 'kurashiMemo_itemsCache_v1';
+
+function readCache() {
+  try {
+    const raw = localStorage.getItem(CACHE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw); // { items: [...], savedAt: <ms> }
+  } catch (e) {
+    return null;
+  }
+}
+
+function writeCache(itemsToSave) {
+  try {
+    localStorage.setItem(CACHE_KEY, JSON.stringify({ items: itemsToSave, savedAt: Date.now() }));
+  } catch (e) {
+    // localStorageが使えない/満杯でも致命的ではないので無視
+  }
+}
+
 // ─── State ────────────────────────────────────
 let items    = [];
 let buys     = [];
@@ -296,25 +320,56 @@ function showError(msg) {
   setTimeout(() => b.classList.remove('show'), 5000);
 }
 
+function minutesAgoLabel(savedAt) {
+  const diffMin = Math.max(0, Math.round((Date.now() - savedAt) / 60000));
+  if (diffMin < 1) return 'たった今';
+  return diffMin + '分前';
+}
+
+// ─── 起動時: キャッシュを即表示 ─────────────────
+function renderFromCacheIfAny() {
+  const cached = readCache();
+  if (!cached || !Array.isArray(cached.items) || !cached.items.length) return false;
+  items = cached.items;
+  syncBuys();
+  renderItems();
+  renderBuyList();
+  updateBadge();
+  setSyncState('loading', 'キャッシュを表示中(' + minutesAgoLabel(cached.savedAt) + ') — 最新データ確認中...');
+  return true;
+}
+
 // ─── API: GET ─────────────────────────────────
 async function loadFromSheet() {
-  setSyncState('loading', 'Google Sheetsを読み込み中...');
-  document.getElementById('item-list').innerHTML =
-    '<div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>';
+  const hadCache = items.length > 0;
+  if (!hadCache) {
+    setSyncState('loading', 'Google Sheetsを読み込み中...');
+    document.getElementById('item-list').innerHTML =
+      '<div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>';
+  } else {
+    setSyncState('loading', '最新データを確認中...');
+  }
   try {
     const res  = await fetch(GAS_URL);
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || '不明なエラー');
     items = data.items;
+    writeCache(items);
     syncBuys();
     renderItems();
     renderBuyList();
     updateBadge();
     setSyncState('ok', '最終更新: ' + nowStr());
   } catch (e) {
-    setSyncState('error', '接続失敗 — 手動で更新してください');
-    showError('Sheetsへの接続に失敗しました: ' + e.message);
-    renderItems();
+    if (hadCache) {
+      // キャッシュ表示は維持したまま、オフライン扱いにする
+      setSyncState('error', 'オフライン — キャッシュ表示中（↻ 更新で再試行）');
+      showError('最新データの取得に失敗しました。表示中の内容は前回取得分です。');
+    } else {
+      setSyncState('error', '接続失敗 — 手動で更新してください');
+      showError('Sheetsへの接続に失敗しました: ' + e.message);
+      renderItems();
+    }
   }
 }
 
@@ -346,6 +401,7 @@ async function addItem() {
     const result = await postAction({ action: 'add', name, status: 'low', price });
     const idx = items.findIndex(i => i.id === tempId);
     if (idx !== -1) { items[idx].id = result.id; items[idx]._saving = false; }
+    writeCache(items);
     syncBuys();
     renderItems();
     renderBuyList();
@@ -353,6 +409,7 @@ async function addItem() {
     toast('「' + name + '」を登録しました');
   } catch (e) {
     items = items.filter(i => i.id !== tempId);
+    writeCache(items);
     syncBuys();
     renderItems();
     renderBuyList();
@@ -372,6 +429,7 @@ function cycleStatus(id) {
   const cycle = { ok: 'low', low: 'out', out: 'ok' };
   item.status = cycle[item.status];
   updateBadge();
+  writeCache(items);
 
   // カードのUI即更新（位置はそのまま）
   const card = document.querySelector(`.item-card[data-id="${id}"]`);
@@ -429,6 +487,7 @@ async function deleteItem(id) {
 
   const backup = [...items];
   items = items.filter(i => String(i.id) !== String(id));
+  writeCache(items);
   syncBuys();
   renderItems();
   renderBuyList();
@@ -441,6 +500,7 @@ async function deleteItem(id) {
     setSyncState('ok', '最終更新: ' + nowStr());
   } catch (e) {
     items = backup;
+    writeCache(items);
     syncBuys();
     renderItems();
     renderBuyList();
@@ -476,6 +536,7 @@ async function toggleBuy(id) {
     const src = items.find(i => String(i.id) === String(b.srcId));
     if (src && src.status === 'ok') src.status = b.status;
   }
+  writeCache(items);
 
   // 差分更新
   const el = document.querySelector(`.chk-item[data-bid="${id}"]`);
@@ -655,6 +716,8 @@ function toast(msg) {
 }
 
 // ─── Init ─────────────────────────────────────
+// 前回取得分があれば即表示し、体感の待ち時間をなくす（stale-while-revalidate）
+renderFromCacheIfAny();
 loadFromSheet();
 </script>
 </body>
