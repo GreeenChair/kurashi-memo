@@ -340,6 +340,24 @@ function renderFromCacheIfAny() {
 }
 
 // ─── API: GET ─────────────────────────────────
+// サーバーから取得したitemsをそのまま上書きすると、
+// デバウンス中（flushStatus送信待ち）や追加保存中のローカルな
+// 楽観的更新が消えてしまう（=「変更した直後に元に戻る」不具合）。
+// そのため、保留中の変更があるものはローカル側の値を優先してマージする。
+function mergeServerItems(serverItems) {
+  const merged = serverItems.map(si => {
+    const local = items.find(i => String(i.id) === String(si.id));
+    if (local && (statusQueue[si.id] || local._saving)) {
+      // ステータス変更/保存が保留中 → サーバー値ではなくローカル値を維持
+      return { ...si, status: local.status, _saving: local._saving };
+    }
+    return si;
+  });
+  // まだサーバーに反映されていない新規追加分（tmp_idのまま）は保持する
+  const pendingNew = items.filter(i => String(i.id).startsWith('tmp_'));
+  return [...pendingNew, ...merged];
+}
+
 async function loadFromSheet() {
   const hadCache = items.length > 0;
   if (!hadCache) {
@@ -353,7 +371,7 @@ async function loadFromSheet() {
     const res  = await fetch(GAS_URL);
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || '不明なエラー');
-    items = data.items;
+    items = hadCache ? mergeServerItems(data.items) : data.items;
     writeCache(items);
     syncBuys();
     renderItems();
