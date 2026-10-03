@@ -126,6 +126,8 @@ input:disabled { opacity: .5; }
   margin-left: 32px;
 }
 .btn-status.pending { position: relative; }
+/* 送信に失敗し再送待ちの状態（赤・点滅で目立たせる） */
+.btn-status.pending.failed::after { background: var(--red); width: 9px; height: 9px; animation: pulse 1s infinite; }
 
 .btn-del { flex-shrink: 0; border: none; background: none; color: var(--hint); font-size: 15px; cursor: pointer; padding: 4px 6px; -webkit-appearance: none; }
 
@@ -295,9 +297,34 @@ let items    = [];
 let buys     = [];
 let filterSt = 'all';
 
-// ─── ステータスのデバウンスキュー ──────────────
-// { itemId: { timer, pendingStatus } }
-const statusQueue = {};
+// ─── 送信待ちキュー（アウトボックス）──────────────
+// 2026/10/2 の不具合対策:
+//   以前は「タップ → 800ms後に1回だけ送信」で、送信が失敗・中断すると
+//   変更が誰にも気づかれずに消えていた。
+//   今は、未送信のステータス変更を localStorage に保存し、
+//   サーバーが成功を返すまで消さない（失敗時は自動再送、次回起動時も再送）。
+// { itemId: { status, ts } }
+const OUTBOX_KEY = 'kurashiMemo_outbox_v1';
+let outbox = readOutbox();
+
+function readOutbox() {
+  try { return JSON.parse(localStorage.getItem(OUTBOX_KEY)) || {}; }
+  catch (e) { return {}; }
+}
+function saveOutbox() {
+  try { localStorage.setItem(OUTBOX_KEY, JSON.stringify(outbox)); } catch (e) {}
+}
+function pendingCount() { return Object.keys(outbox).length; }
+
+// 連打中はまとめて1回にするためのタイマー（送信の確実性とは無関係）
+const debounceTimers = {};
+
+// 送信は常に1本ずつ（同時に2本送らない＝10/2のハングの引き金を作らない）
+let flushing     = false;
+let flushAgain   = false;
+let retryTimer   = null;
+let retryDelayMs = 5000;            // 失敗時の再送間隔（最大60秒まで倍々）
+const REQUEST_TIMEOUT_MS = 30000;   // 1リクエストの待ち上限
 
 const STATUS_INFO = {
   out: { icon: '🚨', label: '切れた' },
@@ -341,18 +368,23 @@ function renderFromCacheIfAny() {
 
 // ─── API: GET ─────────────────────────────────
 // サーバーから取得したitemsをそのまま上書きすると、
-// デバウンス中（flushStatus送信待ち）や追加保存中のローカルな
-// 楽観的更新が消えてしまう（=「変更した直後に元に戻る」不具合）。
-// そのため、保留中の変更があるものはローカル側の値を優先してマージする。
+// まだサーバーに届いていない変更（アウトボックス内）が消えてしまう。
+// そのため、未送信の変更がある品目はローカル側の値を優先してマージする。
 function mergeServerItems(serverItems) {
   const merged = serverItems.map(si => {
     const local = items.find(i => String(i.id) === String(si.id));
-    if (local && (statusQueue[si.id] || local._saving)) {
-      // ステータス変更/保存が保留中 → サーバー値ではなくローカル値を維持
-      return { ...si, status: local.status, _saving: local._saving };
-    }
+    const pending = outbox[si.id];
+    if (pending) return { ...si, status: pending.status, _saving: local && local._saving };
+    if (local && local._saving) return { ...si, status: local.status, _saving: true };
     return si;
   });
+  // サーバーに存在しない品目の送信待ちは破棄（他端末で削除された等）
+  const serverIds = new Set(serverItems.map(si => String(si.id)));
+  let changed = false;
+  Object.keys(outbox).forEach(id => {
+    if (!serverIds.has(String(id))) { delete outbox[id]; changed = true; }
+  });
+  if (changed) saveOutbox();
   // まだサーバーに反映されていない新規追加分（tmp_idのまま）は保持する
   const pendingNew = items.filter(i => String(i.id).startsWith('tmp_'));
   return [...pendingNew, ...merged];
@@ -368,16 +400,16 @@ async function loadFromSheet() {
     setSyncState('loading', '最新データを確認中...');
   }
   try {
-    const res  = await fetch(GAS_URL);
+    const res  = await fetchWithTimeout(GAS_URL, {});
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || '不明なエラー');
-    items = hadCache ? mergeServerItems(data.items) : data.items;
+    items = mergeServerItems(data.items);
     writeCache(items);
     syncBuys();
     renderItems();
     renderBuyList();
     updateBadge();
-    setSyncState('ok', '最終更新: ' + nowStr());
+    showSyncResult();
   } catch (e) {
     if (hadCache) {
       // キャッシュ表示は維持したまま、オフライン扱いにする
@@ -392,12 +424,107 @@ async function loadFromSheet() {
 }
 
 // ─── API: POST ────────────────────────────────
+// 待ち上限つきのfetch。GASが固まっても無限に待たない。
+async function fetchWithTimeout(url, opts) {
+  const ctrl  = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...opts, signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function postAction(body) {
-  const res  = await fetch(GAS_URL, { method: 'POST', body: JSON.stringify(body) });
+  const res  = await fetchWithTimeout(GAS_URL, { method: 'POST', body: JSON.stringify(body) });
   const data = await res.json();
   if (!data.ok) throw new Error(data.error || '不明なエラー');
   return data;
 }
+
+// ─── 同期状態の表示 ────────────────────────────
+function showSyncResult() {
+  const n = pendingCount();
+  if (n === 0) setSyncState('ok', '最終更新: ' + nowStr());
+  else if (retryTimer) setSyncState('error', '未送信 ' + n + '件 — 自動で再送します');
+  else setSyncState('loading', '送信待ち ' + n + '件...');
+}
+
+function refreshPendingMarks() {
+  document.querySelectorAll('.item-card').forEach(card => {
+    const btn = card.querySelector('.btn-status');
+    if (!btn) return;
+    btn.classList.toggle('pending', !!outbox[card.dataset.id]);
+    btn.classList.toggle('failed',  !!outbox[card.dataset.id] && !!retryTimer);
+  });
+}
+
+// ─── ステータス変更の受付（全経路共通）─────────────
+// 画面を即更新し、アウトボックスに記録してから送信を予約する
+function queueStatus(id, status, delayMs) {
+  outbox[id] = { status, ts: Date.now() };
+  saveOutbox();
+  if (debounceTimers[id]) clearTimeout(debounceTimers[id]);
+  debounceTimers[id] = setTimeout(() => {
+    delete debounceTimers[id];
+    flushOutbox();
+  }, delayMs);
+  refreshPendingMarks();
+  showSyncResult();
+}
+
+// ─── アウトボックスの送信（1本ずつ・成功するまで消さない）──
+async function flushOutbox(opts = {}) {
+  if (flushing) { flushAgain = true; return; }
+  if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+  flushing = true;
+  try {
+    for (const id of Object.keys(outbox)) {
+      if (debounceTimers[id] && !opts.force) continue; // 連打中はまだ送らない
+      const entry = outbox[id];
+      if (!entry) continue;
+      try {
+        await postAction({ action: 'updateStatus', id, status: entry.status });
+      } catch (e) {
+        // 品目が既に削除されている場合は再送しても無意味なので破棄
+        if (/not found/i.test(e.message)) { delete outbox[id]; saveOutbox(); continue; }
+        throw e;
+      }
+      // 送信中に再タップされていたら、新しい方を残す
+      if (outbox[id] && outbox[id].ts === entry.ts) { delete outbox[id]; saveOutbox(); }
+      refreshPendingMarks();
+    }
+    retryDelayMs = 5000;
+  } catch (e) {
+    // 失敗: アウトボックスは残したまま、間隔を空けて自動再送
+    retryTimer = setTimeout(() => { retryTimer = null; flushOutbox(); }, retryDelayMs);
+    retryDelayMs = Math.min(retryDelayMs * 2, 60000);
+  } finally {
+    flushing = false;
+    refreshPendingMarks();
+    showSyncResult();
+    if (flushAgain) { flushAgain = false; flushOutbox(); }
+  }
+}
+
+// アプリを閉じる/切り替える瞬間に、連打待ちの変更も含めて即送信
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') {
+    Object.keys(debounceTimers).forEach(id => { clearTimeout(debounceTimers[id]); delete debounceTimers[id]; });
+    Object.keys(outbox).forEach(id => {
+      // keepalive: ページが止まっても送信だけは続けるようブラウザに依頼
+      try {
+        fetch(GAS_URL, { method: 'POST', keepalive: true,
+          body: JSON.stringify({ action: 'updateStatus', id, status: outbox[id].status }) });
+      } catch (e) {}
+    });
+    // 成功確認はできないので、アウトボックスは消さず次回の送信で確定させる
+  } else {
+    // 復帰時: 未送信分を送り、最新状態を取り直す
+    flushOutbox();
+    loadFromSheet();
+  }
+});
 
 // ─── 品目追加 ──────────────────────────────────
 async function addItem() {
@@ -467,31 +594,8 @@ function cycleStatus(id) {
   const labels = { out: '🚨 切れた', low: '⚠️ 残り少ない', ok: '✅ 十分ある' };
   toast(esc(item.name) + ' → ' + labels[item.status]);
 
-  // デバウンス: 既存タイマーをリセットして800ms後に送信
-  if (statusQueue[id]) clearTimeout(statusQueue[id].timer);
-  statusQueue[id] = {
-    timer: setTimeout(() => flushStatus(id), 800)
-  };
-}
-
-// デバウンス後に実際にAPIへ送信
-async function flushStatus(id) {
-  const item = items.find(i => String(i.id) === String(id));
-  if (!item) return;
-  const card = document.querySelector(`.item-card[data-id="${id}"]`);
-  const savedStatus = item.status; // 送信時点のステータスを保持
-
-  try {
-    setSyncState('loading', '同期中...');
-    await postAction({ action: 'updateStatus', id, status: savedStatus });
-    if (card) card.querySelector('.btn-status')?.classList.remove('pending');
-    delete statusQueue[id];
-    setSyncState('ok', '最終更新: ' + nowStr());
-  } catch (e) {
-    setSyncState('error', '更新失敗');
-    showError('ステータスの更新に失敗しました。↻ 更新で再読み込みしてください。');
-    if (card) card.querySelector('.btn-status')?.classList.remove('pending');
-  }
+  // 連打をまとめるため800ms後に送信。未送信の変更はアウトボックスに保存済み
+  queueStatus(id, item.status, 800);
 }
 
 // ─── 品目削除 ──────────────────────────────────
@@ -500,8 +604,9 @@ async function deleteItem(id) {
   if (!item) return;
   if (!confirm(`「${item.name}」を削除しますか？`)) return;
 
-  // デバウンス中のタイマーがあればキャンセル
-  if (statusQueue[id]) { clearTimeout(statusQueue[id].timer); delete statusQueue[id]; }
+  // 送信待ちのステータス変更があれば破棄
+  if (debounceTimers[id]) { clearTimeout(debounceTimers[id]); delete debounceTimers[id]; }
+  if (outbox[id]) { delete outbox[id]; saveOutbox(); }
 
   const backup = [...items];
   items = items.filter(i => String(i.id) !== String(id));
@@ -549,10 +654,11 @@ async function toggleBuy(id) {
 
   if (b.done && b.srcId) {
     const src = items.find(i => String(i.id) === String(b.srcId));
-    if (src) { src.status = 'ok'; updateBadge(); }
+    if (src) { src.status = 'ok'; updateBadge(); queueStatus(b.srcId, 'ok', 0); }
   } else if (!b.done && b.srcId) {
+    // チェックを外したら元のステータスに戻し、サーバーにも戻す
     const src = items.find(i => String(i.id) === String(b.srcId));
-    if (src && src.status === 'ok') src.status = b.status;
+    if (src && src.status === 'ok') { src.status = b.status; updateBadge(); queueStatus(b.srcId, b.status, 0); }
   }
   writeCache(items);
 
@@ -575,12 +681,6 @@ async function toggleBuy(id) {
 
   if (b.done) {
     toast('✓ 購入済み！「' + b.name + '」をストックありに変更しました');
-    try {
-      await postAction({ action: 'updateStatus', id: b.srcId, status: 'ok' });
-      setSyncState('ok', '最終更新: ' + nowStr());
-    } catch (e) {
-      setSyncState('error', '同期失敗 — ↻ 更新してください');
-    }
   }
 }
 
@@ -613,7 +713,7 @@ function renderItems() {
     const priceStr = item.prices && item.prices.length
       ? '直近 ¥' + Number(item.prices[item.prices.length - 1].p).toLocaleString()
       : '';
-    const isPending = statusQueue[item.id] !== undefined;
+    const isPending = !!outbox[item.id];
 
     const card = document.createElement('div');
     card.className = `item-card status-${item.status}${item._saving ? ' saving' : ''}`;
@@ -737,6 +837,7 @@ function toast(msg) {
 // 前回取得分があれば即表示し、体感の待ち時間をなくす（stale-while-revalidate）
 renderFromCacheIfAny();
 loadFromSheet();
+flushOutbox(); // 前回送れなかった変更があれば再送
 </script>
 </body>
 </html>
